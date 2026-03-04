@@ -1,0 +1,93 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Profile {
+  id          String   @id
+  appId       String
+  accountId   String?
+  displayName String
+  avatarUrl   String?
+  age         Int?
+  city        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  participations Participant[]
+
+  @@index([appId])
+  @@index([accountId])
+}
+
+model Conversation {
+  id        String           @id @default(cuid())
+  appId     String
+  type      ConversationType @default(DIRECT)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  participants Participant[]
+  messages     Message[]
+
+  @@index([appId])
+}
+
+model Participant {
+  id             String    @id @default(cuid())
+  profileId      String
+  conversationId String
+  joinedAt       DateTime  @default(now())
+  lastReadAt     DateTime?
+
+  profile      Profile      @relation(fields: [profileId], references: [id])
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@unique([profileId, conversationId])
+  @@index([conversationId])
+  @@index([profileId])
+}
+
+model Message {
+  id              String      @id @default(cuid())
+  conversationId  String
+  senderProfileId String
+  content         String
+  type            MessageType @default(TEXT)
+  sentAt          DateTime    @default(now())
+  editedAt        DateTime?
+  deletedAt       DateTime?
+
+  conversation Conversation      @relation(fields: [conversationId], references: [id])
+  reactions    MessageReaction[]
+
+  @@index([conversationId, sentAt])
+  @@index([senderProfileId])
+}
+
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  profileId String
+  appId     String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id])
+
+  @@unique([messageId, profileId, emoji])
+  @@index([messageId])
+  @@index([profileId])
+}
+
+enum ConversationType {
+  DIRECT
+}
+
+enum MessageType {
+  TEXT
+}
