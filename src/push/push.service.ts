@@ -1,0 +1,95 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../prisma/prisma.service.js';
+import * as webPush from 'web-push';
+
+@Injectable()
+export class PushService {
+  private readonly logger = new Logger(PushService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private config: ConfigService,
+  ) {
+    const publicKey = this.config.get<string>('vapid.publicKey');
+    const privateKey = this.config.get<string>('vapid.privateKey');
+    const subject = this.config.get<string>('vapid.subject');
+
+    if (publicKey && privateKey && subject) {
+      webPush.setVapidDetails(subject, publicKey, privateKey);
+    } else {
+      this.logger.warn('VAPID keys not configured — web push disabled');
+    }
+  }
+
+  async upsertSubscription(
+    accountId: string,
+    endpoint: string,
+    p256dh: string,
+    auth: string,
+    userAgent?: string,
+  ) {
+    return this.prisma.pushSubscription.upsert({
+      where: { endpoint },
+      create: { accountId, endpoint, p256dh, auth, userAgent },
+      update: { accountId, p256dh, auth, userAgent },
+    });
+  }
+
+  async removeSubscription(endpoint: string) {
+    return this.prisma.pushSubscription.deleteMany({ where: { endpoint } });
+  }
+
+  async sendToAccount(
+    accountId: string,
+    payload: {
+      title: string;
+      body: string;
+      icon?: string;
+      conversationId: string;
+      targetProfileId: string;
+    },
+  ) {
+    const subscriptions = await this.prisma.pushSubscription.findMany({
+      where: { accountId },
+    });
+
+    if (subscriptions.length === 0) return;
+
+    const jsonPayload = JSON.stringify(payload);
+
+    const results = await Promise.allSettled(
+      subscriptions.map((sub) =>
+        webPush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dh, auth: sub.auth },
+          },
+          jsonPayload,
+        ),
+      ),
+    );
+
+    // Clean up expired/invalid subscriptions
+    const toDelete: string[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === 'rejected') {
+        const statusCode = (result.reason as any)?.statusCode;
+        if (statusCode === 404 || statusCode === 410) {
+          toDelete.push(subscriptions[i].id);
+        } else {
+          this.logger.warn(
+            `Push failed for ${subscriptions[i].endpoint}: ${result.reason}`,
+          );
+        }
+      }
+    }
+
+    if (toDelete.length > 0) {
+      await this.prisma.pushSubscription.deleteMany({
+        where: { id: { in: toDelete } },
+      });
+    }
+  }
+}

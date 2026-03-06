@@ -88,6 +88,19 @@ enum ConversationType {
   DIRECT
 }
 
+model PushSubscription {
+  id        String   @id @default(cuid())
+  accountId String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+}
+
 enum MessageType {
   TEXT
 }

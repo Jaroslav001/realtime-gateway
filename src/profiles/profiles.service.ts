@@ -148,4 +148,21 @@ export class ProfilesService {
   async getProfilesByAccount(accountId: string, appId: string): Promise<Profile[]> {
     return this.prisma.profile.findMany({ where: { accountId, appId } });
   }
+
+  async isAccountOnline(appId: string, accountId: string): Promise<boolean> {
+    const profiles = await this.prisma.profile.findMany({
+      where: { accountId, appId },
+      select: { id: true },
+    });
+    if (profiles.length === 0) return false;
+
+    const pipeline = this.redis.pipeline();
+    for (const p of profiles) {
+      pipeline.scard(this.presenceKey(appId, p.id));
+    }
+    const results = await pipeline.exec();
+    if (!results) return false;
+
+    return results.some(([, count]) => (count as number) > 0);
+  }
 }

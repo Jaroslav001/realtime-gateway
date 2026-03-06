@@ -17,6 +17,7 @@ import { ConversationsService } from '../conversations/conversations.service.js'
 import { ChatService } from './chat.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EventRelayService } from '../event-relay/event-relay.service.js';
+import { PushService } from '../push/push.service.js';
 
 @WebSocketGateway({
   cors: {
@@ -35,6 +36,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     private chatService: ChatService,
     private prisma: PrismaService,
     private eventRelay: EventRelayService,
+    private pushService: PushService,
   ) {}
 
   afterInit(server: Server) {
@@ -345,6 +347,25 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
               messagePreview: trimmed.slice(0, 80),
               createdAt: msgPayload.sentAt,
             });
+
+            // Web Push when account has no connected sockets
+            const targetAccountId = p.profile.accountId;
+            this.profilesService
+              .isAccountOnline(appId, targetAccountId)
+              .then((isOnline) => {
+                if (!isOnline) {
+                  return this.pushService.sendToAccount(targetAccountId, {
+                    title: message.sender.displayName,
+                    body: trimmed.slice(0, 80),
+                    icon: message.sender.avatarUrl || '/icon-192x192.png',
+                    conversationId: payload.conversationId,
+                    targetProfileId: p.profileId,
+                  });
+                }
+              })
+              .catch((err) => {
+                // Non-fatal: don't break message flow
+              });
           }
         }
       }
