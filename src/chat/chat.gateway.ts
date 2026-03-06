@@ -350,9 +350,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
 
             // Web Push when account has no connected sockets
             const targetAccountId = p.profile.accountId;
+            const logger = this.pushService['logger'];
             this.profilesService
               .isAccountOnline(appId, targetAccountId)
               .then((isOnline) => {
+                logger.log(`Push check: account=${targetAccountId} isOnline=${isOnline}`);
                 if (!isOnline) {
                   return this.pushService.sendToAccount(targetAccountId, {
                     title: message.sender.displayName,
@@ -364,7 +366,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
                 }
               })
               .catch((err) => {
-                // Non-fatal: don't break message flow
+                logger.error(`Push error: ${err.message}`, err.stack);
               });
           }
         }

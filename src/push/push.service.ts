@@ -54,6 +54,7 @@ export class PushService {
       where: { accountId },
     });
 
+    this.logger.log(`sendToAccount: account=${accountId} subscriptions=${subscriptions.length}`);
     if (subscriptions.length === 0) return;
 
     const jsonPayload = JSON.stringify(payload);
@@ -79,7 +80,7 @@ export class PushService {
         if (statusCode === 404 || statusCode === 410) {
           toDelete.push(subscriptions[i].id);
         } else {
-          this.logger.warn(
+          this.logger.error(
             `Push failed for ${subscriptions[i].endpoint}: ${result.reason}`,
           );
         }
