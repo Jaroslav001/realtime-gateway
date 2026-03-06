@@ -361,14 +361,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
             // Only send push if no active heartbeat (app not in foreground)
             const targetAccountId = p.profile.accountId!;
             const heartbeatKey = `account:${targetAccountId}:heartbeat`;
-            this.redisClient.get(heartbeatKey).then((val) => {
+            this.redisClient.get(heartbeatKey).then(async (val) => {
               if (val) return; // App is in foreground — in-app toast handles it
+              const unreadCount = await this.conversationsService.getTotalUnreadCountByAccount(appId, targetAccountId).catch(() => 0);
               return this.pushService.sendToAccount(targetAccountId, {
                 title: message.sender.displayName,
                 body: trimmed.slice(0, 80),
                 icon: message.sender.avatarUrl || '/icon-192x192.png',
                 conversationId: payload.conversationId,
                 targetProfileId: p.profileId,
+                unreadCount,
               });
             }).catch(() => {});
           }

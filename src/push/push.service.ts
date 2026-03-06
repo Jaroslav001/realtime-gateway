@@ -48,6 +48,7 @@ export class PushService {
       icon?: string;
       conversationId: string;
       targetProfileId: string;
+      unreadCount?: number;
     },
   ) {
     const subscriptions = await this.prisma.pushSubscription.findMany({
