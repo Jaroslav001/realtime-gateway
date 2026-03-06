@@ -348,29 +348,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
               createdAt: msgPayload.sentAt,
             });
 
-            // Web Push when account has no live connected sockets
-            const targetAccountId = p.profile.accountId;
-            const logger = this.pushService['logger'];
-            const accountRoom = `account:${targetAccountId}`;
-            this.server.in(accountRoom).fetchSockets()
-              .then((sockets) => {
-                // Only count sockets that aren't the sender
-                const liveSockets = sockets.filter(s => s.data?.user?.accountId !== accountId);
-                const isOnline = liveSockets.length > 0;
-                logger.log(`Push check: account=${targetAccountId} liveSockets=${liveSockets.length} isOnline=${isOnline}`);
-                if (!isOnline) {
-                  return this.pushService.sendToAccount(targetAccountId, {
-                    title: message.sender.displayName,
-                    body: trimmed.slice(0, 80),
-                    icon: message.sender.avatarUrl || '/icon-192x192.png',
-                    conversationId: payload.conversationId,
-                    targetProfileId: p.profileId,
-                  });
-                }
-              })
-              .catch((err) => {
-                logger.error(`Push error: ${err.message}`, err.stack);
-              });
+            // Always send Web Push for cross-account messages
+            // sw.js will suppress if app is in foreground
+            this.pushService.sendToAccount(p.profile.accountId, {
+              title: message.sender.displayName,
+              body: trimmed.slice(0, 80),
+              icon: message.sender.avatarUrl || '/icon-192x192.png',
+              conversationId: payload.conversationId,
+              targetProfileId: p.profileId,
+            }).catch(() => {});
           }
         }
       }
