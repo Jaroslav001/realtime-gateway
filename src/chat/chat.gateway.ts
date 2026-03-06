@@ -333,6 +333,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       for (const p of participants) {
         if (p.profileId !== payload.profileId) {
           this.server.to(`profile:${p.profileId}`).emit('message:received', msgPayload);
+
+          // Notification to account room (skip sender's own account)
+          if (p.profile.accountId && p.profile.accountId !== accountId) {
+            this.server.to(`account:${p.profile.accountId}`).emit('notification:new-message', {
+              conversationId: payload.conversationId,
+              profileId: payload.profileId,
+              targetProfileId: p.profileId,
+              senderName: message.sender.displayName,
+              senderAvatar: message.sender.avatarUrl,
+              messagePreview: trimmed.slice(0, 80),
+              createdAt: msgPayload.sentAt,
+            });
+          }
         }
       }
 
