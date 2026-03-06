@@ -9,9 +9,11 @@ import {
   OnGatewayInit,
   WsException,
 } from '@nestjs/websockets';
-import { UseGuards } from '@nestjs/common';
+import { Inject, UseGuards } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
+import Redis from 'ioredis';
 import { WsJwtGuard } from '../auth/ws-jwt.guard.js';
+import { REDIS_CLIENT } from '../redis/redis.module.js';
 import { ProfilesService } from '../profiles/profiles.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
 import { ChatService } from './chat.service.js';
@@ -31,6 +33,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
   server: Server;
 
   constructor(
+    @Inject(REDIS_CLIENT) private redisClient: Redis,
     private profilesService: ProfilesService,
     private conversationsService: ConversationsService,
     private chatService: ChatService,
@@ -284,6 +287,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     }
   }
 
+  @SubscribeMessage('heartbeat')
+  handleHeartbeat(@ConnectedSocket() client: Socket) {
+    const accountId = client.data?.user?.accountId;
+    if (!accountId) return;
+    this.redisClient.set(`account:${accountId}:heartbeat`, '1', 'EX', 25);
+  }
+
   @SubscribeMessage('conversation:create')
   async handleConversationCreate(
     @ConnectedSocket() client: Socket,
@@ -348,14 +358,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
               createdAt: msgPayload.sentAt,
             });
 
-            // Always send Web Push for cross-account messages
-            // sw.js will suppress if app is in foreground
-            this.pushService.sendToAccount(p.profile.accountId, {
-              title: message.sender.displayName,
-              body: trimmed.slice(0, 80),
-              icon: message.sender.avatarUrl || '/icon-192x192.png',
-              conversationId: payload.conversationId,
-              targetProfileId: p.profileId,
+            // Only send push if no active heartbeat (app not in foreground)
+            const targetAccountId = p.profile.accountId!;
+            const heartbeatKey = `account:${targetAccountId}:heartbeat`;
+            this.redisClient.get(heartbeatKey).then((val) => {
+              if (val) return; // App is in foreground — in-app toast handles it
+              return this.pushService.sendToAccount(targetAccountId, {
+                title: message.sender.displayName,
+                body: trimmed.slice(0, 80),
+                icon: message.sender.avatarUrl || '/icon-192x192.png',
+                conversationId: payload.conversationId,
+                targetProfileId: p.profileId,
+              });
             }).catch(() => {});
           }
         }
