@@ -348,13 +348,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
               createdAt: msgPayload.sentAt,
             });
 
-            // Web Push when account has no connected sockets
+            // Web Push when account has no live connected sockets
             const targetAccountId = p.profile.accountId;
             const logger = this.pushService['logger'];
-            this.profilesService
-              .isAccountOnline(appId, targetAccountId)
-              .then((isOnline) => {
-                logger.log(`Push check: account=${targetAccountId} isOnline=${isOnline}`);
+            const accountRoom = `account:${targetAccountId}`;
+            this.server.in(accountRoom).fetchSockets()
+              .then((sockets) => {
+                // Only count sockets that aren't the sender
+                const liveSockets = sockets.filter(s => s.data?.user?.accountId !== accountId);
+                const isOnline = liveSockets.length > 0;
+                logger.log(`Push check: account=${targetAccountId} liveSockets=${liveSockets.length} isOnline=${isOnline}`);
                 if (!isOnline) {
                   return this.pushService.sendToAccount(targetAccountId, {
                     title: message.sender.displayName,
