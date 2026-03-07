@@ -15,6 +15,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { ProfilesService } from '../profiles/profiles.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
 import { ChatService } from './chat.service.js';
+import { ChatGateway } from './chat.gateway.js';
 import { CreateConversationDto } from '../conversations/dto/create-conversation.dto.js';
 import { RegisterProfilesDto } from '../profiles/dto/register-profiles.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -26,6 +27,7 @@ export class ChatController {
     private profilesService: ProfilesService,
     private conversationsService: ConversationsService,
     private chatService: ChatService,
+    private chatGateway: ChatGateway,
     private prisma: PrismaService,
   ) {}
 
@@ -180,6 +182,11 @@ export class ChatController {
     const { accountId, appId } = req.user;
     const count = await this.conversationsService.getTotalUnreadCountByAccount(appId, accountId);
     return { count };
+  }
+
+  @Get('admin/connections')
+  async getConnections() {
+    return this.chatGateway.getConnectionsDebugInfo();
   }
 
   private formatConversation(c: any) {

@@ -134,6 +134,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       const profileId = String(profileData.id);
       client.data.profileId = profileId;
       client.data.appId = user.appId;
+      client.data.isPWA = !!client.handshake.auth?.isPWA;
+      client.data.connectedAt = Date.now();
 
       await this.profilesService.profileConnected(user.appId, profileId, client.id);
       client.join(`profile:${profileId}`);
@@ -146,6 +148,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       }
 
       client.emit('connected', { profileId, appId: user.appId });
+
+      // Notify admin watchers
+      this.server.to('admin').emit('admin:connected', this.buildConnectionInfo(client));
     } catch (err) {
       client.emit('error', {
         event: 'connect',
@@ -157,6 +162,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
   }
 
   async handleDisconnect(client: Socket) {
+    // Notify admin watchers
+    this.server.to('admin').emit('admin:disconnected', { socketId: client.id });
+
+    // Clean up heartbeat key
+    this.redisClient.del(`heartbeat:${client.id}`).catch(() => {});
+
     const { profileId, appId, extraProfileIds } = client.data ?? {};
     if (profileId && appId) {
       const remaining = await this.profilesService.profileDisconnected(appId, profileId, client.id);
@@ -289,9 +300,77 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
 
   @SubscribeMessage('heartbeat')
   handleHeartbeat(@ConnectedSocket() client: Socket) {
-    const accountId = client.data?.user?.accountId;
-    if (!accountId) return;
-    this.redisClient.set(`account:${accountId}:heartbeat`, '1', 'EX', 25);
+    if (!client.data?.user) return;
+    this.redisClient.set(`heartbeat:${client.id}`, '1', 'EX', 25);
+    this.server.to('admin').emit('admin:heartbeat', { socketId: client.id, hasHeartbeat: true });
+  }
+
+  @SubscribeMessage('push:endpoint')
+  handlePushEndpoint(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { endpoint: string },
+  ) {
+    if (payload?.endpoint) {
+      client.data.pushEndpoint = payload.endpoint;
+    }
+  }
+
+  @SubscribeMessage('admin:subscribe')
+  async handleAdminSubscribe(@ConnectedSocket() client: Socket) {
+    client.join('admin');
+    const snapshot = await this.getConnectionsDebugInfo();
+    client.emit('admin:snapshot', snapshot);
+  }
+
+  private buildConnectionInfo(client: Socket) {
+    return {
+      socketId: client.id,
+      accountId: client.data?.user?.accountId ?? null,
+      profileId: client.data?.profileId ?? null,
+      extraProfileIds: client.data?.extraProfileIds ?? [],
+      isPWA: client.data?.isPWA ?? false,
+      pushEndpoint: client.data?.pushEndpoint ?? null,
+      hasHeartbeat: false,
+      connectedAt: client.data?.connectedAt ?? null,
+      userAgent: client.handshake?.headers?.['user-agent'] ?? null,
+      rooms: [...client.rooms],
+      ip: client.handshake?.address ?? null,
+    };
+  }
+
+  async getConnectionsDebugInfo() {
+    const sockets = await this.server.fetchSockets();
+    const connections: ReturnType<ChatGateway['buildConnectionInfo']>[] = [];
+
+    for (const s of sockets) {
+      const hb = await this.redisClient.get(`heartbeat:${s.id}`);
+      connections.push({
+        socketId: s.id,
+        accountId: s.data?.user?.accountId ?? null,
+        profileId: s.data?.profileId ?? null,
+        extraProfileIds: s.data?.extraProfileIds ?? [],
+        isPWA: s.data?.isPWA ?? false,
+        pushEndpoint: s.data?.pushEndpoint ?? null,
+        hasHeartbeat: !!hb,
+        connectedAt: s.data?.connectedAt ?? null,
+        userAgent: s.handshake?.headers?.['user-agent'] ?? null,
+        rooms: [...s.rooms],
+        ip: s.handshake?.address ?? null,
+      });
+    }
+
+    const uniqueAccounts = new Set(connections.map((c) => c.accountId).filter(Boolean));
+    const uniqueProfiles = new Set(connections.map((c) => c.profileId).filter(Boolean));
+
+    return {
+      summary: {
+        totalSockets: connections.length,
+        uniqueAccounts: uniqueAccounts.size,
+        uniqueProfiles: uniqueProfiles.size,
+        withHeartbeat: connections.filter((c) => c.hasHeartbeat).length,
+      },
+      connections,
+    };
   }
 
   @SubscribeMessage('conversation:create')
@@ -358,21 +437,34 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
               createdAt: msgPayload.sentAt,
             });
 
-            // Only send push if no active heartbeat (app not in foreground)
+            // Per-device push suppression: skip push for devices with active heartbeat
             const targetAccountId = p.profile.accountId!;
-            const heartbeatKey = `account:${targetAccountId}:heartbeat`;
-            this.redisClient.get(heartbeatKey).then(async (val) => {
-              if (val) return; // App is in foreground — in-app toast handles it
+            (async () => {
+              const accountSockets = await this.server.in(`account:${targetAccountId}`).fetchSockets();
+              const suppressedEndpoints = new Set<string>();
+              for (const s of accountSockets) {
+                if (s.data.pushEndpoint) {
+                  const hb = await this.redisClient.get(`heartbeat:${s.id}`);
+                  if (hb) suppressedEndpoints.add(s.data.pushEndpoint);
+                }
+              }
+
               const unreadCount = await this.conversationsService.getTotalUnreadCountByAccount(appId, targetAccountId).catch(() => 0);
-              return this.pushService.sendToAccount(targetAccountId, {
+              const pushPayload = {
                 title: message.sender.displayName,
                 body: trimmed.slice(0, 80),
                 icon: message.sender.avatarUrl || '/icon-192x192.png',
                 conversationId: payload.conversationId,
                 targetProfileId: p.profileId,
                 unreadCount,
-              });
-            }).catch(() => {});
+              };
+
+              if (suppressedEndpoints.size > 0) {
+                await this.pushService.sendToAccountFiltered(targetAccountId, pushPayload, suppressedEndpoints);
+              } else {
+                await this.pushService.sendToAccount(targetAccountId, pushPayload);
+              }
+            })().catch(() => {});
           }
         }
       }

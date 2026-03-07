@@ -94,4 +94,62 @@ export class PushService {
       });
     }
   }
+
+  async sendToAccountFiltered(
+    accountId: string,
+    payload: {
+      title: string;
+      body: string;
+      icon?: string;
+      conversationId: string;
+      targetProfileId: string;
+      unreadCount?: number;
+    },
+    suppressedEndpoints: Set<string>,
+  ) {
+    const subscriptions = await this.prisma.pushSubscription.findMany({
+      where: { accountId },
+    });
+
+    const toSend = subscriptions.filter((s) => !suppressedEndpoints.has(s.endpoint));
+    this.logger.log(
+      `sendToAccountFiltered: account=${accountId} total=${subscriptions.length} suppressed=${suppressedEndpoints.size} sending=${toSend.length}`,
+    );
+    if (toSend.length === 0) return;
+
+    const jsonPayload = JSON.stringify(payload);
+
+    const results = await Promise.allSettled(
+      toSend.map((sub) =>
+        webPush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dh, auth: sub.auth },
+          },
+          jsonPayload,
+        ),
+      ),
+    );
+
+    const toDelete: string[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === 'rejected') {
+        const statusCode = (result.reason as any)?.statusCode;
+        if (statusCode === 404 || statusCode === 410) {
+          toDelete.push(toSend[i].id);
+        } else {
+          this.logger.error(
+            `Push failed for ${toSend[i].endpoint}: ${result.reason}`,
+          );
+        }
+      }
+    }
+
+    if (toDelete.length > 0) {
+      await this.prisma.pushSubscription.deleteMany({
+        where: { id: { in: toDelete } },
+      });
+    }
+  }
 }

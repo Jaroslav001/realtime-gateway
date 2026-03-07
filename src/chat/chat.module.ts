@@ -12,5 +12,6 @@ import { PushModule } from '../push/push.module.js';
   imports: [AuthModule, ProfilesModule, ConversationsModule, EventRelayModule, PushModule],
   providers: [ChatGateway, ChatService],
   controllers: [ChatController],
+  exports: [ChatGateway],
 })
 export class ChatModule {}
