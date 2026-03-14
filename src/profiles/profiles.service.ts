@@ -59,7 +59,7 @@ export class ProfilesService {
   }
 
   async setManuallyOffline(appId: string, profileId: string): Promise<void> {
-    await this.redis.set(this.manualOfflineKey(appId, profileId), '1');
+    await this.redis.set(this.manualOfflineKey(appId, profileId), '1', 'EX', 86400);
   }
 
   async clearManuallyOffline(appId: string, profileId: string): Promise<void> {
@@ -93,7 +93,6 @@ export class ProfilesService {
         'EX',
         2592000,
       );
-      await this.redis.del(this.manualOfflineKey(appId, profileId));
     }
     return remaining;
   }
