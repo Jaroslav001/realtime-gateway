@@ -32,6 +32,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
   @WebSocketServer()
   server: Server;
 
+  private pendingOffline = new Map<string, NodeJS.Timeout>();
+  private static readonly OFFLINE_GRACE_MS = 5_000;
+
   constructor(
     @Inject(REDIS_CLIENT) private redisClient: Redis,
     private profilesService: ProfilesService,
@@ -77,6 +80,35 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       isOnline,
       lastSeenAt,
     });
+  }
+
+  private presenceTimerKey(appId: string, profileId: string): string {
+    return `${appId}:${profileId}`;
+  }
+
+  private scheduleOfflineBroadcast(appId: string, profileId: string): void {
+    const key = this.presenceTimerKey(appId, profileId);
+    const existing = this.pendingOffline.get(key);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(async () => {
+      this.pendingOffline.delete(key);
+      const stillOffline = !(await this.profilesService.isProfileOnline(appId, profileId));
+      if (stillOffline) {
+        await this.broadcastPresenceChange(appId, profileId, false);
+      }
+    }, ChatGateway.OFFLINE_GRACE_MS);
+
+    this.pendingOffline.set(key, timer);
+  }
+
+  private cancelOfflineBroadcast(appId: string, profileId: string): void {
+    const key = this.presenceTimerKey(appId, profileId);
+    const timer = this.pendingOffline.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.pendingOffline.delete(key);
+    }
   }
 
   async handleConnection(client: Socket) {
@@ -138,6 +170,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       client.data.connectedAt = Date.now();
 
       await this.profilesService.profileConnected(user.appId, profileId, client.id);
+      this.cancelOfflineBroadcast(user.appId, profileId);
       client.join(`profile:${profileId}`);
       client.join(`account:${user.accountId}`);
 
@@ -172,12 +205,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     if (profileId && appId) {
       const remaining = await this.profilesService.profileDisconnected(appId, profileId, client.id);
       if (remaining === 0) {
-        await this.broadcastPresenceChange(appId, profileId, false);
+        this.scheduleOfflineBroadcast(appId, profileId);
       }
       for (const id of extraProfileIds ?? []) {
         const extraRemaining = await this.profilesService.profileDisconnected(appId, id, client.id);
         if (extraRemaining === 0) {
-          await this.broadcastPresenceChange(appId, id, false);
+          this.scheduleOfflineBroadcast(appId, id);
         }
       }
     }
@@ -197,6 +230,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       for (const id of payload.profileIds) {
         if (ownedIds.has(id) && id !== client.data.profileId) {
           await this.profilesService.profileConnected(appId, id, client.id);
+          this.cancelOfflineBroadcast(appId, id);
           client.join(`profile:${id}`);
           extra.push(id);
 
