@@ -104,3 +104,16 @@ model PushSubscription {
 enum MessageType {
   TEXT
 }
+
+model ShoutboxMessage {
+  id              String    @id @default(cuid())
+  appId           String
+  senderProfileId String
+  content         String
+  sentAt          DateTime  @default(now())
+  deletedAt       DateTime?
+
+  @@index([sentAt])
+  @@index([senderProfileId])
+  @@index([appId, sentAt])
+}

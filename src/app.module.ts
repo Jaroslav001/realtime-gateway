@@ -10,6 +10,7 @@ import { ChatModule } from './chat/chat.module.js';
 import { EventRelayModule } from './event-relay/event-relay.module.js';
 import { HealthModule } from './health/health.module.js';
 import { PushModule } from './push/push.module.js';
+import { ShoutboxModule } from './shoutbox/shoutbox.module.js';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { PushModule } from './push/push.module.js';
     EventRelayModule,
     HealthModule,
     PushModule,
+    ShoutboxModule,
   ],
 })
 export class AppModule {}
