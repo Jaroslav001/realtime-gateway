@@ -20,6 +20,7 @@ import { ChatService } from './chat.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EventRelayService } from '../event-relay/event-relay.service.js';
 import { PushService } from '../push/push.service.js';
+import { ShoutboxService } from '../shoutbox/shoutbox.service.js';
 
 @WebSocketGateway({
   cors: {
@@ -43,6 +44,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     private prisma: PrismaService,
     private eventRelay: EventRelayService,
     private pushService: PushService,
+    private shoutboxService: ShoutboxService,
   ) {}
 
   afterInit(server: Server) {
@@ -118,8 +120,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
         client.handshake?.headers?.authorization;
 
       if (!rawToken) {
-        client.emit('error', { event: 'connect', code: 'UNAUTHORIZED', message: 'No token' });
-        client.disconnect();
+        // Guest connection: join shoutbox room only, no profile/presence
+        client.data.guest = true;
+        client.join('shoutbox');
+        client.emit('connected', { guest: true });
         return;
       }
 
@@ -181,6 +185,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       }
 
       client.emit('connected', { profileId, appId: user.appId });
+
+      // Auto-join shoutbox room for all authenticated users
+      client.join('shoutbox');
 
       // Notify admin watchers
       this.server.to('admin').emit('admin:connected', this.buildConnectionInfo(client));
@@ -337,6 +344,40 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     if (!client.data?.user) return;
     this.redisClient.set(`heartbeat:${client.id}`, '1', 'EX', 25);
     this.server.to('admin').emit('admin:heartbeat', { socketId: client.id, hasHeartbeat: true });
+  }
+
+  @SubscribeMessage('shoutbox:send')
+  async handleShoutboxSend(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { content: string },
+  ) {
+    try {
+      // Block guests from sending
+      if (client.data.guest) {
+        return this.emitError(client, 'shoutbox:send', new WsException('Guests cannot send messages'));
+      }
+
+      const profileId = client.data.profileId;
+      const appId = client.data.appId;
+
+      // Rate limit check
+      const allowed = await this.shoutboxService.checkRateLimit(profileId);
+      if (!allowed) {
+        return this.emitError(client, 'shoutbox:send', new WsException('Rate limited: wait 2 seconds between messages'));
+      }
+
+      // Validate content
+      const trimmed = payload.content?.trim();
+      if (!trimmed || trimmed.length > 500) {
+        return this.emitError(client, 'shoutbox:send', new WsException('Message must be 1-500 characters'));
+      }
+
+      // Persist and broadcast
+      const message = await this.shoutboxService.createMessage(appId, profileId, trimmed);
+      this.server.to('shoutbox').emit('shoutbox:message', message);
+    } catch (err) {
+      this.emitError(client, 'shoutbox:send', err);
+    }
   }
 
   @SubscribeMessage('push:endpoint')
