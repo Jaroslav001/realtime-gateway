@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ChatGateway } from './chat.gateway.js';
 import { ChatService } from './chat.service.js';
 import { ChatController } from './chat.controller.js';
@@ -10,7 +10,7 @@ import { PushModule } from '../push/push.module.js';
 import { ShoutboxModule } from '../shoutbox/shoutbox.module.js';
 
 @Module({
-  imports: [AuthModule, ProfilesModule, ConversationsModule, EventRelayModule, PushModule, ShoutboxModule],
+  imports: [AuthModule, ProfilesModule, ConversationsModule, EventRelayModule, PushModule, forwardRef(() => ShoutboxModule)],
   providers: [ChatGateway, ChatService],
   controllers: [ChatController],
   exports: [ChatGateway],
