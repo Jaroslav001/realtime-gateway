@@ -20,6 +20,16 @@ export class ShoutboxController {
     private chatGateway: ChatGateway,
   ) {}
 
+  @Get('profiles/search')
+  @UseGuards(AuthGuard('jwt'))
+  async searchProfiles(
+    @Query('q') query: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsedLimit = limit ? Math.min(Math.max(parseInt(limit, 10), 1), 10) : 5;
+    return this.shoutboxService.searchProfiles(query, parsedLimit);
+  }
+
   @Get('messages')
   async getMessages(
     @Query('limit') limit?: string,

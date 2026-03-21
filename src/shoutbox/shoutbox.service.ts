@@ -84,6 +84,18 @@ export class ShoutboxService {
     return { messages: formatted, nextCursor };
   }
 
+  async searchProfiles(query: string, limit: number = 5) {
+    if (!query || query.length < 1) return [];
+    return this.prisma.profile.findMany({
+      where: {
+        displayName: { contains: query, mode: 'insensitive' },
+      },
+      select: { id: true, displayName: true, avatarUrl: true, age: true },
+      take: limit,
+      orderBy: { displayName: 'asc' },
+    });
+  }
+
   async softDelete(id: string) {
     return this.prisma.shoutboxMessage.update({
       where: { id },

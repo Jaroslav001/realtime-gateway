@@ -375,6 +375,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       // Persist and broadcast
       const message = await this.shoutboxService.createMessage(appId, profileId, trimmed);
       this.server.to('shoutbox').emit('shoutbox:message', message);
+
+      // Parse mentions and notify mentioned profiles
+      const mentionRegex = /@\[([^\]]+)\]\(([^)]+)\)/g;
+      let mentionMatch: RegExpExecArray | null;
+      while ((mentionMatch = mentionRegex.exec(trimmed)) !== null) {
+        const mentionedProfileId = mentionMatch[2];
+        if (mentionedProfileId !== profileId) {  // Don't notify self
+          this.server.to(`profile:${mentionedProfileId}`).emit('shoutbox:mentioned', {
+            messageId: message.id,
+            senderName: message.sender?.displayName ?? 'Someone',
+            senderAvatar: message.sender?.avatarUrl ?? null,
+            content: trimmed.slice(0, 80),
+          });
+        }
+      }
     } catch (err) {
       this.emitError(client, 'shoutbox:send', err);
     }
