@@ -14,7 +14,6 @@ import { Namespace, Socket } from 'socket.io';
 import { OnEvent } from '@nestjs/event-emitter';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import Redis from 'ioredis';
-import { WsOperatorJwtGuard } from './ws-operator-jwt.guard.js';
 import { OperatorService } from './operator.service.js';
 import { EventRelayService } from '../event-relay/event-relay.service.js';
 import { ChatService } from '../chat/chat.service.js';
