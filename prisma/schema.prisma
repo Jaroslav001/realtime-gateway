@@ -61,6 +61,7 @@ model Message {
   sentAt          DateTime    @default(now())
   editedAt        DateTime?
   deletedAt       DateTime?
+  sentByOperatorId String?
 
   conversation Conversation      @relation(fields: [conversationId], references: [id])
   reactions    MessageReaction[]
