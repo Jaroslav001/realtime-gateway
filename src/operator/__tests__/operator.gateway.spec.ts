@@ -39,12 +39,18 @@ function createMockGateway() {
     del: jest.fn().mockResolvedValue(1),
   };
 
+  const profilesService = {
+    getBulkPresence: jest.fn().mockResolvedValue({}),
+    isAccountOnline: jest.fn().mockResolvedValue(false),
+  };
+
   const gateway = new OperatorGateway(
     eventRelay as any,
     operatorService as any,
     chatService as any,
     conversationsService as any,
     prisma as any,
+    profilesService as any,
     eventEmitter as any,
     redis as any,
   );

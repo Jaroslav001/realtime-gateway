@@ -6,6 +6,7 @@ import { AuthModule } from '../auth/auth.module.js';
 import { ConversationsModule } from '../conversations/conversations.module.js';
 import { ChatModule } from '../chat/chat.module.js';
 import { EventRelayModule } from '../event-relay/event-relay.module.js';
+import { ProfilesModule } from '../profiles/profiles.module.js';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { EventRelayModule } from '../event-relay/event-relay.module.js';
     ConversationsModule,
     forwardRef(() => ChatModule),
     EventRelayModule,
+    ProfilesModule,
   ],
   providers: [OperatorGateway, OperatorService, WsOperatorJwtGuard],
   exports: [OperatorService],

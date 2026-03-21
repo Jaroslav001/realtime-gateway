@@ -20,6 +20,7 @@ import { EventRelayService } from '../event-relay/event-relay.service.js';
 import { ChatService } from '../chat/chat.service.js';
 import { ConversationsService, ConversationWithPreview } from '../conversations/conversations.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ProfilesService } from '../profiles/profiles.service.js';
 import { REDIS_CLIENT } from '../redis/redis.module.js';
 import {
   CHAT_MESSAGE_CREATED,
@@ -51,6 +52,7 @@ export class OperatorGateway
     private chatService: ChatService,
     private conversationsService: ConversationsService,
     private prisma: PrismaService,
+    private profilesService: ProfilesService,
     private eventEmitter: EventEmitter2,
     @Inject(REDIS_CLIENT) private redis: Redis,
   ) {}
@@ -106,6 +108,10 @@ export class OperatorGateway
       );
 
       client.emit('connected', { operatorId, managedProfileIds });
+
+      // Emit server-side daily reply count
+      const dailyCount = await this.operatorService.getDailyReplyCount(operatorId);
+      client.emit('operator:daily-count', { count: dailyCount });
 
       this.logger.log(
         `Operator ${operatorId} connected, managing ${managedProfileIds.length} profiles`,
@@ -225,6 +231,39 @@ export class OperatorGateway
         conversation.id,
         payload.managedProfileId,
       );
+
+      // Response time tracking: check if this is first operator reply since last inbound
+      try {
+        const lastInbound = await this.prisma.message.findFirst({
+          where: {
+            conversationId: conversation.id,
+            senderProfileId: { not: payload.managedProfileId },
+            sentByOperatorId: null,
+          },
+          orderBy: { sentAt: 'desc' },
+          select: { sentAt: true },
+        });
+
+        if (lastInbound) {
+          // Check no operator reply exists after that inbound message
+          const operatorReplyAfter = await this.prisma.message.count({
+            where: {
+              conversationId: conversation.id,
+              sentByOperatorId: { not: null },
+              sentAt: { gt: lastInbound.sentAt },
+              id: { not: message.id }, // exclude current message
+            },
+          });
+
+          if (operatorReplyAfter === 0) {
+            const responseTimeMs = message.sentAt.getTime() - lastInbound.sentAt.getTime();
+            await this.operatorService.recordResponseTime(conversation.id, operatorId, responseTimeMs);
+            this.logger.log(`Response time recorded: ${responseTimeMs}ms for conversation ${conversation.id}`);
+          }
+        }
+      } catch (rtErr) {
+        this.logger.warn('Failed to record response time', (rtErr as Error).message);
+      }
 
       const msgPayload = { ...message, sentAt: message.sentAt.toISOString() };
 
@@ -356,6 +395,110 @@ export class OperatorGateway
       });
     } catch (err) {
       this.emitError(client, 'operator:mark-read', err);
+    }
+  }
+
+  @SubscribeMessage('operator:ranking:set')
+  async handleRankingSet(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { profileId: string; rating: number; category: string },
+  ) {
+    try {
+      const { operatorId } = client.data.operator;
+      const ranking = await this.operatorService.setProfileRanking(
+        payload.profileId, payload.rating, payload.category, operatorId,
+      );
+      client.emit('operator:ranking:updated', {
+        profileId: payload.profileId,
+        rating: ranking.rating,
+        category: ranking.category,
+        updatedBy: operatorId,
+      });
+    } catch (err) {
+      this.emitError(client, 'operator:ranking:set', err);
+    }
+  }
+
+  @SubscribeMessage('operator:ranking:get')
+  async handleRankingGet(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { profileId: string },
+  ) {
+    try {
+      const ranking = await this.operatorService.getProfileRanking(payload.profileId);
+      client.emit('operator:ranking:data', {
+        profileId: payload.profileId,
+        rating: ranking?.rating ?? null,
+        category: ranking?.category ?? null,
+      });
+    } catch (err) {
+      this.emitError(client, 'operator:ranking:get', err);
+    }
+  }
+
+  @SubscribeMessage('operator:notes:save')
+  async handleNotesSave(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { profileId: string; content: string },
+  ) {
+    try {
+      const { operatorId } = client.data.operator;
+      const note = await this.operatorService.saveProfileNote(payload.profileId, operatorId, payload.content);
+      client.emit('operator:notes:saved', {
+        profileId: payload.profileId,
+        note: { id: note.id, operatorId: note.operatorId, content: note.content, updatedAt: note.updatedAt.toISOString() },
+      });
+    } catch (err) {
+      this.emitError(client, 'operator:notes:save', err);
+    }
+  }
+
+  @SubscribeMessage('operator:notes:get')
+  async handleNotesGet(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { profileId: string },
+  ) {
+    try {
+      const notes = await this.operatorService.getProfileNotes(payload.profileId);
+      client.emit('operator:notes:data', {
+        profileId: payload.profileId,
+        notes: notes.map(n => ({
+          id: n.id, operatorId: n.operatorId, content: n.content, updatedAt: n.updatedAt.toISOString(),
+        })),
+      });
+    } catch (err) {
+      this.emitError(client, 'operator:notes:get', err);
+    }
+  }
+
+  @SubscribeMessage('operator:presence:check')
+  async handlePresenceCheck(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { profileIds: string[]; managedProfileId?: string },
+  ) {
+    try {
+      const { appId } = client.data.operator;
+      const presence = await this.profilesService.getBulkPresence(appId, payload.profileIds);
+
+      // If managedProfileId provided, also check owner (account) presence
+      let ownerOnline: boolean | null = null;
+      if (payload.managedProfileId) {
+        const managedProfile = await this.prisma.profile.findUnique({
+          where: { id: payload.managedProfileId },
+          select: { accountId: true },
+        });
+        if (managedProfile?.accountId) {
+          ownerOnline = await this.profilesService.isAccountOnline(appId, managedProfile.accountId);
+        }
+      }
+
+      client.emit('operator:presence:data', {
+        presence,
+        ownerOnline,
+        managedProfileId: payload.managedProfileId ?? null,
+      });
+    } catch (err) {
+      this.emitError(client, 'operator:presence:check', err);
     }
   }
 
