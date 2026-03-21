@@ -301,6 +301,64 @@ export class OperatorGateway
     }
   }
 
+  @SubscribeMessage('operator:message:history')
+  async handleMessageHistory(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { managedProfileId: string; conversationId: string; limit?: number; cursor?: string },
+  ) {
+    try {
+      const { managedProfileIds } = client.data.operator;
+
+      if (!managedProfileIds.includes(payload.managedProfileId)) {
+        throw new WsException('Not assigned to this profile');
+      }
+
+      // Verify managed profile is participant (not assertOwnership - operators don't own profiles)
+      await this.conversationsService.assertParticipant(payload.conversationId, payload.managedProfileId);
+
+      const result = await this.chatService.getMessages(
+        payload.conversationId,
+        payload.limit ?? 50,
+        payload.cursor,
+      );
+
+      client.emit('operator:message:history', {
+        conversationId: payload.conversationId,
+        messages: result.messages.map(m => ({
+          ...m,
+          sentAt: m.sentAt instanceof Date ? m.sentAt.toISOString() : m.sentAt,
+        })),
+        nextCursor: result.nextCursor,
+      });
+    } catch (err) {
+      this.emitError(client, 'operator:message:history', err);
+    }
+  }
+
+  @SubscribeMessage('operator:mark-read')
+  async handleMarkRead(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { managedProfileId: string; conversationId: string },
+  ) {
+    try {
+      const { managedProfileIds } = client.data.operator;
+
+      if (!managedProfileIds.includes(payload.managedProfileId)) {
+        throw new WsException('Not assigned to this profile');
+      }
+
+      await this.conversationsService.assertParticipant(payload.conversationId, payload.managedProfileId);
+      await this.conversationsService.markAsRead(payload.conversationId, payload.managedProfileId);
+
+      client.emit('operator:conversation:read', {
+        conversationId: payload.conversationId,
+        managedProfileId: payload.managedProfileId,
+      });
+    } catch (err) {
+      this.emitError(client, 'operator:mark-read', err);
+    }
+  }
+
   @OnEvent(CHAT_MESSAGE_CREATED)
   handleIncomingMessage(event: any) {
     if (event.source === 'operator') return; // Don't echo back
