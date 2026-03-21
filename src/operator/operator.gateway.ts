@@ -18,7 +18,7 @@ import { WsOperatorJwtGuard } from './ws-operator-jwt.guard.js';
 import { OperatorService } from './operator.service.js';
 import { EventRelayService } from '../event-relay/event-relay.service.js';
 import { ChatService } from '../chat/chat.service.js';
-import { ConversationsService } from '../conversations/conversations.service.js';
+import { ConversationsService, ConversationWithPreview } from '../conversations/conversations.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { REDIS_CLIENT } from '../redis/redis.module.js';
 import {
@@ -129,6 +129,54 @@ export class OperatorGateway
     await this.redis.del('operator-presence:' + operatorId);
 
     this.logger.log(`Operator ${operatorId} disconnected`);
+  }
+
+  @SubscribeMessage('operator:conversations:list')
+  async handleConversationsList(
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+      const { appId, managedProfileIds } = client.data.operator;
+
+      // Aggregate conversations across all managed profiles
+      const allConversations: (ConversationWithPreview & { managedProfileId: string })[] = [];
+      const seenConversationIds = new Set<string>();
+
+      for (const profileId of managedProfileIds) {
+        const conversations = await this.conversationsService.getProfileConversations(appId, profileId);
+        for (const conv of conversations) {
+          if (!seenConversationIds.has(conv.id)) {
+            seenConversationIds.add(conv.id);
+            allConversations.push({
+              ...conv,
+              managedProfileId: profileId,
+              createdAt: conv.createdAt instanceof Date ? conv.createdAt : new Date(conv.createdAt),
+              updatedAt: conv.updatedAt instanceof Date ? conv.updatedAt : new Date(conv.updatedAt),
+            });
+          }
+        }
+      }
+
+      // Sort by updatedAt descending (most recent first)
+      allConversations.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+
+      // Serialize dates to ISO strings for the client
+      const serialized = allConversations.map(c => ({
+        ...c,
+        createdAt: c.createdAt.toISOString(),
+        updatedAt: c.updatedAt.toISOString(),
+        lastMessage: c.lastMessage ? {
+          ...c.lastMessage,
+          sentAt: c.lastMessage.sentAt instanceof Date
+            ? c.lastMessage.sentAt.toISOString()
+            : c.lastMessage.sentAt,
+        } : null,
+      }));
+
+      client.emit('operator:conversations', serialized);
+    } catch (err) {
+      this.emitError(client, 'operator:conversations:list', err);
+    }
   }
 
   @SubscribeMessage('operator:message:send')
