@@ -91,6 +91,8 @@ describe('ChatGateway - Shoutbox Behavior', () => {
       mockEventRelayService as any,
       mockPushService as any,
       mockShoutboxService as any,
+      { emit: jest.fn() } as any,
+      { isManagedProfile: jest.fn().mockReturnValue(false) } as any,
     );
     (gateway as any).server = mockServer;
   });

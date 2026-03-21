@@ -12,6 +12,7 @@ import { EventRelayModule } from './event-relay/event-relay.module.js';
 import { HealthModule } from './health/health.module.js';
 import { PushModule } from './push/push.module.js';
 import { ShoutboxModule } from './shoutbox/shoutbox.module.js';
+import { OperatorModule } from './operator/operator.module.js';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { ShoutboxModule } from './shoutbox/shoutbox.module.js';
     HealthModule,
     PushModule,
     ShoutboxModule,
+    OperatorModule,
   ],
 })
 export class AppModule {}

@@ -12,6 +12,7 @@ import {
 import { Inject, UseGuards } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import Redis from 'ioredis';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { WsJwtGuard } from '../auth/ws-jwt.guard.js';
 import { REDIS_CLIENT } from '../redis/redis.module.js';
 import { ProfilesService } from '../profiles/profiles.service.js';
@@ -21,6 +22,17 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { EventRelayService } from '../event-relay/event-relay.service.js';
 import { PushService } from '../push/push.service.js';
 import { ShoutboxService } from '../shoutbox/shoutbox.service.js';
+import { OperatorService } from '../operator/operator.service.js';
+import {
+  CHAT_MESSAGE_CREATED,
+  CHAT_TYPING_UPDATE,
+  CHAT_CONVERSATION_READ,
+  OPERATOR_MESSAGE_SENT,
+  OPERATOR_TYPING_UPDATE,
+  ChatMessageCreatedEvent,
+  ChatTypingEvent,
+  ChatConversationReadEvent,
+} from '../operator/operator-events.js';
 
 @WebSocketGateway({
   cors: {
@@ -45,6 +57,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     private eventRelay: EventRelayService,
     private pushService: PushService,
     private shoutboxService: ShoutboxService,
+    private eventEmitter: EventEmitter2,
+    private operatorService: OperatorService,
   ) {}
 
   afterInit(server: Server) {
@@ -515,6 +529,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
         if (p.profileId !== payload.profileId) {
           this.server.to(`profile:${p.profileId}`).emit('message:received', msgPayload);
 
+          // Suppress push for managed profiles (GW-09)
+          if (this.operatorService.isManagedProfile(p.profileId)) {
+            continue; // Skip push -- operator handles this conversation
+          }
+
           // Notification to account room (skip sender's own account)
           if (p.profile.accountId && p.profile.accountId !== accountId) {
             this.server.to(`account:${p.profile.accountId}`).emit('notification:new-message', {
@@ -560,6 +579,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       }
 
       client.emit('message:sent', msgPayload);
+
+      // Cross-namespace relay to operator
+      const recipientIds = participants
+        .filter(p => p.profileId !== payload.profileId)
+        .map(p => p.profileId);
+      this.eventEmitter.emit(CHAT_MESSAGE_CREATED, {
+        conversationId: payload.conversationId,
+        senderProfileId: payload.profileId,
+        recipientProfileIds: recipientIds,
+        message: msgPayload,
+        source: 'user',
+      } as ChatMessageCreatedEvent);
     } catch (err) {
       this.emitError(client, 'message:send', err);
     }
@@ -629,6 +660,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
           });
         }
       }
+
+      // Cross-namespace relay to operator
+      const typingRecipients = participants
+        .filter(p => p.profileId !== payload.profileId)
+        .map(p => p.profileId);
+      this.eventEmitter.emit(CHAT_TYPING_UPDATE, {
+        conversationId: payload.conversationId,
+        profileId: payload.profileId,
+        isTyping,
+        source: 'user',
+        targetProfileIds: typingRecipients,
+      } as ChatTypingEvent);
     } catch (err) {
       this.emitError(client, isTyping ? 'typing:start' : 'typing:stop', err);
     }
@@ -665,6 +708,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
           });
         }
       }
+
+      this.eventEmitter.emit(CHAT_CONVERSATION_READ, {
+        conversationId: payload.conversationId,
+        profileId: payload.profileId,
+        lastReadAt: now,
+      } as ChatConversationReadEvent);
     } catch (err) {
       this.emitError(client, 'conversation:read', err);
     }
@@ -736,6 +785,44 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
         conversationId,
         messageId,
         reactions,
+      });
+    }
+  }
+
+  @OnEvent(OPERATOR_MESSAGE_SENT)
+  async handleOperatorMessage(event: any) {
+    const e = event as ChatMessageCreatedEvent;
+    if (e.source !== 'operator') return;
+    for (const recipientId of e.recipientProfileIds) {
+      // Deliver message to user on default namespace
+      this.server.to(`profile:${recipientId}`).emit('message:received', e.message);
+
+      // Push notification for offline recipient
+      const profile = await this.prisma.profile.findUnique({
+        where: { id: recipientId },
+        select: { accountId: true, displayName: true },
+      });
+      if (profile?.accountId && !this.operatorService.isManagedProfile(recipientId)) {
+        const senderName = e.message?.sender?.displayName ?? 'Someone';
+        this.pushService.sendToAccount(profile.accountId, {
+          title: senderName,
+          body: e.message.content?.substring(0, 100) ?? 'New message',
+          conversationId: e.conversationId,
+          targetProfileId: recipientId,
+        });
+      }
+    }
+  }
+
+  @OnEvent(OPERATOR_TYPING_UPDATE)
+  handleOperatorTyping(event: any) {
+    const e = event as ChatTypingEvent;
+    if (e.source !== 'operator') return;
+    for (const targetId of e.targetProfileIds) {
+      this.server.to(`profile:${targetId}`).emit('typing:update', {
+        conversationId: e.conversationId,
+        profileId: e.profileId,
+        isTyping: e.isTyping,
       });
     }
   }
