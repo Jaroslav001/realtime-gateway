@@ -5,10 +5,7 @@ import {
   OnModuleInit,
   OnModuleDestroy,
 } from '@nestjs/common';
-import {
-  WebSocketServer,
-} from '@nestjs/websockets';
-import { Server } from 'socket.io';
+import { Server, Namespace } from 'socket.io';
 import { REDIS_CLIENT } from '../redis/redis.module.js';
 import Redis from 'ioredis';
 
@@ -31,9 +28,7 @@ const CHANNEL = 'events:broadcast';
 export class EventRelayService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(EventRelayService.name);
   private subscriber: Redis;
-
-  @WebSocketServer()
-  private server: Server;
+  private servers = new Map<string, Server | Namespace>();
 
   constructor(@Inject(REDIS_CLIENT) private redis: Redis) {}
 
@@ -60,14 +55,13 @@ export class EventRelayService implements OnModuleInit, OnModuleDestroy {
           return;
         }
 
-        // The server ref is injected lazily via the ChatGateway's @WebSocketServer.
-        // If we don't have it yet, log and skip.
-        if (!this.server) {
-          this.logger.warn('Socket.IO server not available yet — dropping event');
+        const target = this.getTargetServer(room);
+        if (!target) {
+          this.logger.warn(`No server registered for room: ${room}`);
           return;
         }
 
-        this.server.to(room).emit(name, payload);
+        target.to(room).emit(name, payload);
       } catch (err) {
         this.logger.error('Failed to parse/relay event', (err as Error).message);
       }
@@ -82,10 +76,18 @@ export class EventRelayService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Called by the ChatGateway after bootstrap to inject the Socket.IO server
-   * instance. This avoids a circular dependency.
+   * Called by gateways after bootstrap to register their Socket.IO server
+   * or namespace instance. Routes events by room prefix.
    */
-  setServer(server: Server) {
-    this.server = server;
+  setServer(server: Server | Namespace, namespace: string = 'default') {
+    this.servers.set(namespace, server);
+    this.logger.log(`Registered server for namespace: ${namespace}`);
+  }
+
+  private getTargetServer(room: string): Server | Namespace | undefined {
+    if (room.startsWith('op:')) {
+      return this.servers.get('operator');
+    }
+    return this.servers.get('default');
   }
 }

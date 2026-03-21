@@ -30,6 +30,12 @@ export class WsJwtGuard implements CanActivate {
       const payload = this.jwtService.verify(token, {
         secret: this.configService.get<string>('jwt.secret'),
       });
+
+      // Reject operator tokens on user namespace (GW-03)
+      if (payload.type === 'operator') {
+        throw new WsException('Operator tokens cannot connect to user namespace');
+      }
+
       client.data.user = {
         userId: String(payload.sub),
         accountId: String(payload.account_id),

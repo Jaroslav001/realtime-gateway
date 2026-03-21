@@ -48,7 +48,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
   ) {}
 
   afterInit(server: Server) {
-    this.eventRelay.setServer(server);
+    this.eventRelay.setServer(server, 'default');
   }
 
   private async broadcastPresenceChange(appId: string, profileId: string, isOnline: boolean) {

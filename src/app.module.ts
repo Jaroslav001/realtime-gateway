@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import configuration from './config/configuration.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { RedisModule } from './redis/redis.module.js';
@@ -15,6 +16,7 @@ import { ShoutboxModule } from './shoutbox/shoutbox.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, load: [configuration] }),
+    EventEmitterModule.forRoot(),
     PrismaModule,
     RedisModule,
     AuthModule,
