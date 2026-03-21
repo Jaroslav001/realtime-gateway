@@ -6,7 +6,8 @@ describe('OperatorService', () => {
 
   beforeEach(() => {
     mockRedis = { set: jest.fn(), del: jest.fn() };
-    service = new OperatorService(mockRedis);
+    const mockPrisma = {} as any;
+    service = new OperatorService(mockRedis, mockPrisma);
   });
 
   describe('managed profile tracking', () => {

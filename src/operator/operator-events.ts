@@ -3,6 +3,8 @@ export const CHAT_TYPING_UPDATE = 'chat.typing.update';
 export const CHAT_CONVERSATION_READ = 'chat.conversation.read';
 export const OPERATOR_MESSAGE_SENT = 'operator.message.sent';
 export const OPERATOR_TYPING_UPDATE = 'operator.typing.update';
+export const OPERATOR_RANKING_SET = 'operator.ranking.set';
+export const OPERATOR_NOTES_SAVED = 'operator.notes.saved';
 
 export interface ChatMessageCreatedEvent {
   conversationId: string;

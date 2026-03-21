@@ -118,3 +118,45 @@ model ShoutboxMessage {
   @@index([senderProfileId])
   @@index([appId, sentAt])
 }
+
+enum ProfileCategory {
+  SERIOUS
+  CASUAL
+  TIME_WASTER
+  VIP
+}
+
+model ProfileRanking {
+  id         String          @id @default(cuid())
+  profileId  String          @unique
+  rating     Int             // 1-5
+  category   ProfileCategory
+  updatedBy  String          // operatorId
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@index([profileId])
+}
+
+model ProfileNote {
+  id         String   @id @default(cuid())
+  profileId  String
+  operatorId String
+  content    String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([profileId])
+  @@index([operatorId])
+}
+
+model OperatorMetric {
+  id             String   @id @default(cuid())
+  conversationId String
+  operatorId     String
+  responseTimeMs Int
+  recordedAt     DateTime @default(now())
+
+  @@index([operatorId])
+  @@index([conversationId])
+}
