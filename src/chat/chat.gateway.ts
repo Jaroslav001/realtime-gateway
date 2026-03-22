@@ -61,8 +61,24 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     private operatorService: OperatorService,
   ) {}
 
-  afterInit(server: Server) {
+  async afterInit(server: Server) {
     this.eventRelay.setServer(server, 'default');
+
+    // Flush stale presence socket sets from previous process.
+    // On restart no sockets are connected, so all entries are stale.
+    // Preserves lastseen and manual-offline keys.
+    try {
+      const keys: string[] = await this.redisClient.keys('presence:*');
+      const stale = keys.filter(
+        (k) => !k.includes(':lastseen:') && !k.includes(':manual-offline:') && !k.includes(':heartbeat:'),
+      );
+      if (stale.length > 0) {
+        await this.redisClient.del(...stale);
+        console.log(`[ChatGateway] Flushed ${stale.length} stale presence keys on startup`);
+      }
+    } catch (err) {
+      console.error('[ChatGateway] Failed to flush stale presence keys:', err);
+    }
   }
 
   private async broadcastPresenceChange(appId: string, profileId: string, isOnline: boolean) {
